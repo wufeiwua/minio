@@ -17,6 +17,7 @@
 package logger
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/minio/minio/cmd/config"
@@ -33,6 +34,7 @@ type HTTP struct {
 	Enabled   bool   `json:"enabled"`
 	Endpoint  string `json:"endpoint"`
 	AuthToken string `json:"authToken"`
+	QueueSize int    `json:"queueSize"`
 }
 
 // Config console and http logger targets
@@ -49,10 +51,12 @@ const (
 
 	EnvLoggerWebhookEnable    = "MINIO_LOGGER_WEBHOOK_ENABLE"
 	EnvLoggerWebhookEndpoint  = "MINIO_LOGGER_WEBHOOK_ENDPOINT"
+	EnvLoggerWebhookQueueSize = "MINIO_LOGGER_WEBHOOK_QUEUE_SIZE"
 	EnvLoggerWebhookAuthToken = "MINIO_LOGGER_WEBHOOK_AUTH_TOKEN"
 
 	EnvAuditWebhookEnable    = "MINIO_AUDIT_WEBHOOK_ENABLE"
 	EnvAuditWebhookEndpoint  = "MINIO_AUDIT_WEBHOOK_ENDPOINT"
+	EnvAuditWebhookQueueSize = "MINIO_AUDIT_WEBHOOK_QUEUE_SIZE"
 	EnvAuditWebhookAuthToken = "MINIO_AUDIT_WEBHOOK_AUTH_TOKEN"
 )
 
@@ -220,6 +224,14 @@ func LookupConfig(scfg config.Config) (Config, error) {
 		if err != nil || !enable {
 			continue
 		}
+		queueSizeEnv := EnvLoggerWebhookQueueSize
+		if target != config.Default {
+			queueSizeEnv = EnvLoggerWebhookQueueSize + config.Default + target
+		}
+		queueSize, err := strconv.Atoi(env.Get(queueSizeEnv, "100000"))
+		if err != nil {
+			continue
+		}
 		endpointEnv := EnvLoggerWebhookEndpoint
 		if target != config.Default {
 			endpointEnv = EnvLoggerWebhookEndpoint + config.Default + target
@@ -232,6 +244,7 @@ func LookupConfig(scfg config.Config) (Config, error) {
 			Enabled:   true,
 			Endpoint:  env.Get(endpointEnv, ""),
 			AuthToken: env.Get(authTokenEnv, ""),
+			QueueSize: queueSize,
 		}
 	}
 
@@ -249,6 +262,14 @@ func LookupConfig(scfg config.Config) (Config, error) {
 		if err != nil || !enable {
 			continue
 		}
+		queueSizeEnv := EnvAuditWebhookQueueSize
+		if target != config.Default {
+			queueSizeEnv = EnvAuditWebhookQueueSize + config.Default + target
+		}
+		queueSize, err := strconv.Atoi(env.Get(queueSizeEnv, "100000"))
+		if err != nil {
+			continue
+		}
 		endpointEnv := EnvAuditWebhookEndpoint
 		if target != config.Default {
 			endpointEnv = EnvAuditWebhookEndpoint + config.Default + target
@@ -261,6 +282,7 @@ func LookupConfig(scfg config.Config) (Config, error) {
 			Enabled:   true,
 			Endpoint:  env.Get(endpointEnv, ""),
 			AuthToken: env.Get(authTokenEnv, ""),
+			QueueSize: queueSize,
 		}
 	}
 
@@ -289,6 +311,7 @@ func LookupConfig(scfg config.Config) (Config, error) {
 			Enabled:   true,
 			Endpoint:  kv.Get(Endpoint),
 			AuthToken: kv.Get(AuthToken),
+			QueueSize: 100000,
 		}
 	}
 
@@ -317,6 +340,7 @@ func LookupConfig(scfg config.Config) (Config, error) {
 			Enabled:   true,
 			Endpoint:  kv.Get(Endpoint),
 			AuthToken: kv.Get(AuthToken),
+			QueueSize: 100000,
 		}
 	}
 

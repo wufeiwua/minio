@@ -61,7 +61,7 @@ func (h *Target) String() string {
 
 // Validate validate the http target
 func (h *Target) Validate() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.endpoint, strings.NewReader(`{}`))
@@ -107,6 +107,7 @@ func (h *Target) startHTTPLogger() {
 		for entry := range h.logCh {
 			logJSON, err := json.Marshal(&entry)
 			if err != nil {
+				logger.LogIf(context.Background(), fmt.Errorf("failed to marshal %v: %v", entry, err))
 				continue
 			}
 
@@ -114,6 +115,8 @@ func (h *Target) startHTTPLogger() {
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 				h.endpoint, bytes.NewReader(logJSON))
 			if err != nil {
+				logger.LogIf(ctx, fmt.Errorf("%s returned '%w', please check your endpoint configuration",
+					h.endpoint, err))
 				cancel()
 				continue
 			}
@@ -130,7 +133,7 @@ func (h *Target) startHTTPLogger() {
 			resp, err := h.client.Do(req)
 			cancel()
 			if err != nil {
-				logger.LogIf(ctx, fmt.Errorf("%s returned '%w', please check your endpoint configuration\n",
+				logger.LogIf(ctx, fmt.Errorf("%s returned '%w', please check your endpoint configuration",
 					h.endpoint, err))
 				continue
 			}
@@ -199,12 +202,18 @@ func WithTransport(transport *http.Transport) Option {
 	}
 }
 
+// WithQueueSize adds a custom queue size to control the
+// in-flux of requeusts
+func WithQueueSize(size int) Option {
+	return func(t *Target) {
+		t.logCh = make(chan interface{}, size)
+	}
+}
+
 // New initializes a new logger target which
 // sends log over http to the specified endpoint
 func New(opts ...Option) *Target {
-	h := &Target{
-		logCh: make(chan interface{}, 10000),
-	}
+	h := &Target{}
 
 	// Loop through each option
 	for _, opt := range opts {
@@ -226,9 +235,11 @@ func (h *Target) Send(entry interface{}, errKind string) error {
 	select {
 	case h.logCh <- entry:
 	default:
+		err := errors.New("log buffer full")
+		logger.LogIf(context.Background(), fmt.Errorf("audit event lost %v: %v", entry, err))
 		// log channel is full, do not wait and return
 		// an error immediately to the caller
-		return errors.New("log buffer full")
+		return err
 	}
 
 	return nil
