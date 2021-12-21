@@ -24,11 +24,37 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/minio/madmin-go"
 	"github.com/minio/minio/internal/logger"
 	"github.com/minio/minio/internal/sync/errgroup"
 )
+
+const reservedMetadataPrefixLowerDataShardFix = ReservedMetadataPrefixLower + "data-shard-fix"
+
+// AcceptableDelta returns 'true' if the fi.DiskMTime is under
+// acceptable delta of "delta" duration with maxTime.
+//
+// This code is primarily used for heuristic detection of
+// incorrect shards, as per https://github.com/minio/minio/pull/13803
+//
+// This check only is active if we could find maximally
+// occurring disk mtimes that are somewhat same across
+// the quorum. Allowing to skip those shards which we
+// might think are wrong.
+func (fi FileInfo) AcceptableDelta(maxTime time.Time, delta time.Duration) bool {
+	diff := maxTime.Sub(fi.DiskMTime)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < delta
+}
+
+// DataShardFixed - data shard fixed?
+func (fi FileInfo) DataShardFixed() bool {
+	return fi.Metadata[reservedMetadataPrefixLowerDataShardFix] == "true"
+}
 
 // Heals a bucket if it doesn't exist on one of the disks, additionally
 // also heals the missing entries for bucket metadata files
@@ -211,6 +237,11 @@ func shouldHealObjectOnDisk(erErr, dataErr error, meta FileInfo, latestMeta File
 		return true
 	}
 	if erErr == nil {
+		if meta.XLV1 {
+			// Legacy means heal always
+			// always check first.
+			return true
+		}
 		if !meta.Deleted && !meta.IsRemote() {
 			// If xl.meta was read fine but there may be problem with the part.N files.
 			if IsErr(dataErr, []error{
@@ -221,19 +252,7 @@ func shouldHealObjectOnDisk(erErr, dataErr error, meta FileInfo, latestMeta File
 				return true
 			}
 		}
-		if !latestMeta.MetadataEquals(meta) {
-			return true
-		}
-		if !latestMeta.TransitionInfoEquals(meta) {
-			return true
-		}
-		if !latestMeta.ReplicationInfoEquals(meta) {
-			return true
-		}
-		if !latestMeta.ModTime.Equal(meta.ModTime) {
-			return true
-		}
-		if meta.XLV1 {
+		if !latestMeta.Equals(meta) {
 			return true
 		}
 	}
@@ -281,14 +300,13 @@ func (er erasureObjects) healObject(ctx context.Context, bucket string, object s
 
 	// List of disks having latest version of the object er.meta
 	// (by modtime).
-	_, modTime, dataDir := listOnlineDisks(storageDisks, partsMetadata, errs)
+	onlineDisks, modTime := listOnlineDisks(storageDisks, partsMetadata, errs)
 
-	// make sure all parts metadata dataDir is same as returned by listOnlineDisks()
-	// the reason is its possible that some of the disks might have stale data, for those
-	// we simply override them with maximally occurring 'dataDir' - this ensures that
-	// disksWithAllParts() verifies same dataDir across all drives.
-	for i := range partsMetadata {
-		partsMetadata[i].DataDir = dataDir
+	// Latest FileInfo for reference. If a valid metadata is not
+	// present, it is as good as object not found.
+	latestMeta, err := pickValidFileInfo(ctx, partsMetadata, modTime, result.DataBlocks)
+	if err != nil {
+		return result, toObjectErr(err, bucket, object, versionID)
 	}
 
 	// List of disks having all parts as per latest metadata.
@@ -300,15 +318,8 @@ func (er erasureObjects) healObject(ctx context.Context, bucket string, object s
 	// used here for reconstruction. This is done to ensure that
 	// we do not skip drives that have inconsistent metadata to be
 	// skipped from purging when they are stale.
-	availableDisks, dataErrs := disksWithAllParts(ctx, storageDisks, partsMetadata,
-		errs, bucket, object, scanMode)
-
-	// Latest FileInfo for reference. If a valid metadata is not
-	// present, it is as good as object not found.
-	latestMeta, err := pickValidFileInfo(ctx, partsMetadata, modTime, dataDir, result.DataBlocks)
-	if err != nil {
-		return result, toObjectErr(err, bucket, object, versionID)
-	}
+	availableDisks, dataErrs := disksWithAllParts(ctx, onlineDisks, partsMetadata,
+		errs, latestMeta, bucket, object, scanMode)
 
 	// Loop to find number of disks with valid data, per-drive
 	// data state and a list of outdated disks on which data needs

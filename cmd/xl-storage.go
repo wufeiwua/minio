@@ -365,32 +365,39 @@ func (s *xlStorage) Healing() *healingTracker {
 	return &h
 }
 
-func (s *xlStorage) readMetadata(ctx context.Context, itemPath string) ([]byte, error) {
+// readsMetadata and returns disk mTime information for xl.meta
+func (s *xlStorage) readMetadataWithDMTime(ctx context.Context, itemPath string) ([]byte, time.Time, error) {
 	if contextCanceled(ctx) {
-		return nil, ctx.Err()
+		return nil, time.Time{}, ctx.Err()
 	}
 
 	if err := checkPathLength(itemPath); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 
 	f, err := OpenFile(itemPath, readMode, 0)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	defer f.Close()
 	stat, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	if stat.IsDir() {
-		return nil, &os.PathError{
+		return nil, time.Time{}, &os.PathError{
 			Op:   "open",
 			Path: itemPath,
 			Err:  syscall.EISDIR,
 		}
 	}
-	return readXLMetaNoData(f, stat.Size())
+	buf, err := readXLMetaNoData(f, stat.Size())
+	return buf, stat.ModTime().UTC(), err
+}
+
+func (s *xlStorage) readMetadata(ctx context.Context, itemPath string) ([]byte, error) {
+	buf, _, err := s.readMetadataWithDMTime(ctx, itemPath)
+	return buf, err
 }
 
 func (s *xlStorage) NSScanner(ctx context.Context, cache dataUsageCache, updates chan<- dataUsageEntry) (dataUsageCache, error) {
@@ -1070,11 +1077,18 @@ func (s *xlStorage) ReadVersion(ctx context.Context, volume, path, versionID str
 	if err != nil {
 		return fi, err
 	}
+	// Validate file path length, before reading.
+	filePath := pathJoin(volumeDir, path)
+	if err = checkPathLength(filePath); err != nil {
+		return fi, err
+	}
+
 	var buf []byte
+	var dmTime time.Time
 	if readData {
-		buf, err = s.ReadAll(ctx, volume, pathJoin(path, xlStorageFormatFile))
+		buf, dmTime, err = s.readAllData(ctx, volumeDir, pathJoin(filePath, xlStorageFormatFile))
 	} else {
-		buf, err = s.readMetadata(ctx, pathJoin(volumeDir, path, xlStorageFormatFile))
+		buf, dmTime, err = s.readMetadataWithDMTime(ctx, pathJoin(filePath, xlStorageFormatFile))
 		if err != nil {
 			if osIsNotExist(err) {
 				if err = Access(volumeDir); err != nil && osIsNotExist(err) {
@@ -1087,7 +1101,7 @@ func (s *xlStorage) ReadVersion(ctx context.Context, volume, path, versionID str
 
 	if err != nil {
 		if err == errFileNotFound {
-			buf, err = s.ReadAll(ctx, volume, pathJoin(path, xlStorageFormatFileV1))
+			buf, dmTime, err = s.readAllData(ctx, volumeDir, pathJoin(filePath, xlStorageFormatFileV1))
 			if err != nil {
 				if err == errFileNotFound {
 					if versionID != "" {
@@ -1113,6 +1127,7 @@ func (s *xlStorage) ReadVersion(ctx context.Context, volume, path, versionID str
 	if err != nil {
 		return fi, err
 	}
+	fi.DiskMTime = dmTime
 
 	if len(fi.Data) == 0 {
 		// We did not read inline data, so we have no references.
@@ -1155,7 +1170,7 @@ func (s *xlStorage) ReadVersion(ctx context.Context, volume, path, versionID str
 			len(fi.Parts) == 1 {
 			partPath := fmt.Sprintf("part.%d", fi.Parts[0].Number)
 			dataPath := pathJoin(volumeDir, path, fi.DataDir, partPath)
-			fi.Data, err = s.readAllData(volumeDir, dataPath)
+			fi.Data, _, err = s.readAllData(ctx, volumeDir, dataPath)
 			if err != nil {
 				return FileInfo{}, err
 			}
@@ -1165,50 +1180,60 @@ func (s *xlStorage) ReadVersion(ctx context.Context, volume, path, versionID str
 	return fi, nil
 }
 
-func (s *xlStorage) readAllData(volumeDir string, filePath string) (buf []byte, err error) {
+func (s *xlStorage) readAllData(ctx context.Context, volumeDir string, filePath string) (buf []byte, dmTime time.Time, err error) {
+	if contextCanceled(ctx) {
+		return nil, time.Time{}, ctx.Err()
+	}
+
 	f, err := OpenFileDirectIO(filePath, readMode, 0666)
 	if err != nil {
 		if osIsNotExist(err) {
 			// Check if the object doesn't exist because its bucket
 			// is missing in order to return the correct error.
 			if err = Access(volumeDir); err != nil && osIsNotExist(err) {
-				return nil, errVolumeNotFound
+				return nil, dmTime, errVolumeNotFound
 			}
-			return nil, errFileNotFound
+			return nil, dmTime, errFileNotFound
 		} else if osIsPermission(err) {
-			return nil, errFileAccessDenied
+			return nil, dmTime, errFileAccessDenied
 		} else if isSysErrNotDir(err) || isSysErrIsDir(err) {
-			return nil, errFileNotFound
+			return nil, dmTime, errFileNotFound
 		} else if isSysErrHandleInvalid(err) {
 			// This case is special and needs to be handled for windows.
-			return nil, errFileNotFound
+			return nil, dmTime, errFileNotFound
 		} else if isSysErrIO(err) {
-			return nil, errFaultyDisk
+			return nil, dmTime, errFaultyDisk
 		} else if isSysErrTooManyFiles(err) {
-			return nil, errTooManyOpenFiles
+			return nil, dmTime, errTooManyOpenFiles
 		} else if isSysErrInvalidArg(err) {
 			st, _ := Lstat(filePath)
 			if st != nil && st.IsDir() {
 				// Linux returns InvalidArg for directory O_DIRECT
 				// we need to keep this fallback code to return correct
 				// errors upwards.
-				return nil, errFileNotFound
+				return nil, dmTime, errFileNotFound
 			}
-			return nil, errUnsupportedDisk
+			return nil, dmTime, errUnsupportedDisk
 		}
-		return nil, err
+		return nil, dmTime, err
 	}
 	r := &xioutil.ODirectReader{
 		File:      f,
 		SmallFile: true,
 	}
 	defer r.Close()
-	buf, err = ioutil.ReadAll(r)
+	stat, err := f.Stat()
 	if err != nil {
+		buf, err = ioutil.ReadAll(r)
 		err = osErrToFileErr(err)
+		return buf, dmTime, err
+	}
+	if stat.IsDir() {
+		return nil, dmTime, errFileNotFound
 	}
 
-	return buf, err
+	buf, err = ioutil.ReadAll(r)
+	return buf, stat.ModTime().UTC(), osErrToFileErr(err)
 }
 
 // ReadAll reads from r until an error or EOF and returns the data it read.
@@ -1229,7 +1254,8 @@ func (s *xlStorage) ReadAll(ctx context.Context, volume string, path string) (bu
 		return nil, err
 	}
 
-	return s.readAllData(volumeDir, filePath)
+	buf, _, err = s.readAllData(ctx, volumeDir, filePath)
+	return buf, err
 }
 
 // ReadFile reads exactly len(buf) bytes into buf. It returns the

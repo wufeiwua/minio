@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/minio/madmin-go"
 	"github.com/minio/minio-go/v7/pkg/tags"
@@ -88,10 +89,10 @@ func (er erasureObjects) CopyObject(ctx context.Context, srcBucket, srcObject, d
 	}
 
 	// List all online disks.
-	onlineDisks, modTime, dataDir := listOnlineDisks(storageDisks, metaArr, errs)
+	onlineDisks, modTime := listOnlineDisks(storageDisks, metaArr, errs)
 
 	// Pick latest valid metadata.
-	fi, err := pickValidFileInfo(ctx, metaArr, modTime, dataDir, readQuorum)
+	fi, err := pickValidFileInfo(ctx, metaArr, modTime, readQuorum)
 	if err != nil {
 		return oi, toObjectErr(err, srcBucket, srcObject)
 	}
@@ -175,6 +176,31 @@ func (er erasureObjects) GetObjectNInfo(ctx context.Context, bucket, object stri
 	fi, metaArr, onlineDisks, err := er.getObjectFileInfo(ctx, bucket, object, opts, true)
 	if err != nil {
 		return nil, toObjectErr(err, bucket, object)
+	}
+
+	if !fi.DataShardFixed() {
+		diskMTime := pickValidDiskTimeWithQuorum(metaArr, fi.Erasure.DataBlocks)
+		delta := 5 * time.Second
+		if !diskMTime.Equal(timeSentinel) && !diskMTime.IsZero() {
+			for index := range onlineDisks {
+				if onlineDisks[index] == OfflineDisk {
+					continue
+				}
+				if !metaArr[index].IsValid() {
+					continue
+				}
+				if !metaArr[index].AcceptableDelta(diskMTime, delta) {
+					// If disk mTime mismatches it is considered outdated
+					// https://github.com/minio/minio/pull/13803
+					//
+					// This check only is active if we could find maximally
+					// occurring disk mtimes that are somewhat same across
+					// the quorum. Allowing to skip those shards which we
+					// might think are wrong.
+					onlineDisks[index] = OfflineDisk
+				}
+			}
+		}
 	}
 
 	objInfo := fi.ToObjectInfo(bucket, object)
@@ -397,10 +423,10 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 	}
 
 	// List all online disks.
-	onlineDisks, modTime, dataDir := listOnlineDisks(disks, metaArr, errs)
+	onlineDisks, modTime := listOnlineDisks(disks, metaArr, errs)
 
 	// Pick latest valid metadata.
-	fi, err = pickValidFileInfo(ctx, metaArr, modTime, dataDir, readQuorum)
+	fi, err = pickValidFileInfo(ctx, metaArr, modTime, readQuorum)
 	if err != nil {
 		return fi, nil, nil, err
 	}
@@ -1405,14 +1431,16 @@ func (er erasureObjects) addPartial(bucket, object, versionID string, size int64
 }
 
 func (er erasureObjects) PutObjectMetadata(ctx context.Context, bucket, object string, opts ObjectOptions) (ObjectInfo, error) {
-	// Lock the object before updating tags.
-	lk := er.NewNSLock(bucket, object)
-	lkctx, err := lk.GetLock(ctx, globalOperationTimeout)
-	if err != nil {
-		return ObjectInfo{}, err
+	if !opts.NoLock {
+		// Lock the object before updating metadata.
+		lk := er.NewNSLock(bucket, object)
+		lkctx, err := lk.GetLock(ctx, globalOperationTimeout)
+		if err != nil {
+			return ObjectInfo{}, err
+		}
+		ctx = lkctx.Context()
+		defer lk.Unlock(lkctx.Cancel)
 	}
-	ctx = lkctx.Context()
-	defer lk.Unlock(lkctx.Cancel)
 
 	disks := er.getDisks()
 
@@ -1425,10 +1453,10 @@ func (er erasureObjects) PutObjectMetadata(ctx context.Context, bucket, object s
 	}
 
 	// List all online disks.
-	_, modTime, dataDir := listOnlineDisks(disks, metaArr, errs)
+	_, modTime := listOnlineDisks(disks, metaArr, errs)
 
 	// Pick latest valid metadata.
-	fi, err := pickValidFileInfo(ctx, metaArr, modTime, dataDir, readQuorum)
+	fi, err := pickValidFileInfo(ctx, metaArr, modTime, readQuorum)
 	if err != nil {
 		return ObjectInfo{}, toObjectErr(err, bucket, object)
 	}
@@ -1476,10 +1504,10 @@ func (er erasureObjects) PutObjectTags(ctx context.Context, bucket, object strin
 	}
 
 	// List all online disks.
-	_, modTime, dataDir := listOnlineDisks(disks, metaArr, errs)
+	_, modTime := listOnlineDisks(disks, metaArr, errs)
 
 	// Pick latest valid metadata.
-	fi, err := pickValidFileInfo(ctx, metaArr, modTime, dataDir, readQuorum)
+	fi, err := pickValidFileInfo(ctx, metaArr, modTime, readQuorum)
 	if err != nil {
 		return ObjectInfo{}, toObjectErr(err, bucket, object)
 	}

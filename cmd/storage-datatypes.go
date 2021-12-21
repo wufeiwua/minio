@@ -178,6 +178,40 @@ type FileInfo struct {
 	SuccessorModTime time.Time
 
 	Fresh bool // indicates this is a first time call to write FileInfo.
+
+	// DiskMTime indicates the mtime of the xl.meta on disk
+	// This is mainly used for detecting a particular issue
+	// reported in https://github.com/minio/minio/pull/13803
+	DiskMTime time.Time `msg:"dmt"`
+}
+
+// Equals checks if fi(FileInfo) matches ofi(FileInfo)
+func (fi FileInfo) Equals(ofi FileInfo) (ok bool) {
+	if !fi.MetadataEquals(ofi) {
+		return false
+	}
+	if !fi.ReplicationInfoEquals(ofi) {
+		return false
+	}
+	if !fi.TransitionInfoEquals(ofi) {
+		return false
+	}
+	return fi.ModTime.Equal(ofi.ModTime)
+}
+
+// GetDataDir returns an expected dataDir given FileInfo
+// - deleteMarker returns "delete-marker"
+// - returns "legacy" if FileInfo is XLV1 and DataDir is
+//   empty, returns DataDir otherwise
+// - returns "dataDir"
+func (fi FileInfo) GetDataDir() string {
+	if fi.Deleted {
+		return "delete-marker"
+	}
+	if fi.XLV1 && fi.DataDir == "" {
+		return "legacy"
+	}
+	return fi.DataDir
 }
 
 // InlineData returns true if object contents are inlined alongside its metadata.
