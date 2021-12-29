@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	minio "github.com/minio/minio-go/v7"
@@ -37,7 +36,7 @@ import (
 )
 
 const (
-	defaultHealthCheckDuration = 100 * time.Second
+	defaultHealthCheckDuration = 30 * time.Second
 )
 
 // BucketTargetSys represents bucket targets subsystem
@@ -163,7 +162,10 @@ func (sys *BucketTargetSys) SetTarget(ctx context.Context, bucket string, tgt *m
 	if !found && !update {
 		newtgts = append(newtgts, *tgt)
 	}
-
+	// cancel health check for previous target client to avoid leak.
+	if prevClnt, ok := sys.arnRemotesMap[tgt.Arn]; ok && prevClnt.healthCancelFn != nil {
+		prevClnt.healthCancelFn()
+	}
 	sys.targetsMap[bucket] = newtgts
 	sys.arnRemotesMap[tgt.Arn] = clnt
 	return nil
@@ -223,6 +225,9 @@ func (sys *BucketTargetSys) RemoveTarget(ctx context.Context, bucket, arnStr str
 		return BucketRemoteTargetNotFound{Bucket: bucket}
 	}
 	sys.targetsMap[bucket] = targets
+	if tgt, ok := sys.arnRemotesMap[arnStr]; ok && tgt.healthCancelFn != nil {
+		tgt.healthCancelFn()
+	}
 	delete(sys.arnRemotesMap, arnStr)
 	return nil
 }
@@ -307,6 +312,9 @@ func (sys *BucketTargetSys) UpdateAllTargets(bucket string, tgts *madmin.BucketT
 		// remove target and arn association
 		if tgts, ok := sys.targetsMap[bucket]; ok {
 			for _, t := range tgts {
+				if tgt, ok := sys.arnRemotesMap[t.Arn]; ok && tgt.healthCancelFn != nil {
+					tgt.healthCancelFn()
+				}
 				delete(sys.arnRemotesMap, t.Arn)
 			}
 		}
@@ -378,13 +386,17 @@ func (sys *BucketTargetSys) getRemoteTargetClient(tcfg *madmin.BucketTarget) (*T
 	if tcfg.HealthCheckDuration >= 1 { // require minimum health check duration of 1 sec.
 		hcDuration = tcfg.HealthCheckDuration
 	}
+	cancelFn, err := api.HealthCheck(hcDuration)
+	if err != nil {
+		return nil, err
+	}
 	tc := &TargetClient{
 		Client:              api,
 		healthCheckDuration: hcDuration,
 		bucket:              tcfg.TargetBucket,
 		replicateSync:       tcfg.ReplicationSync,
+		healthCancelFn:      cancelFn,
 	}
-	go tc.healthCheck()
 	return tc, nil
 }
 
@@ -456,25 +468,8 @@ func parseBucketTargetConfig(bucket string, cdata, cmetadata []byte) (*madmin.Bu
 // TargetClient is the struct for remote target client.
 type TargetClient struct {
 	*miniogo.Client
-	up                  int32
 	healthCheckDuration time.Duration
 	bucket              string // remote bucket target
 	replicateSync       bool
-}
-
-func (tc *TargetClient) isOffline() bool {
-	return atomic.LoadInt32(&tc.up) == 0
-}
-
-func (tc *TargetClient) healthCheck() {
-	for {
-		_, err := tc.BucketExists(GlobalContext, tc.bucket)
-		if err != nil {
-			atomic.StoreInt32(&tc.up, 0)
-			time.Sleep(tc.healthCheckDuration)
-			continue
-		}
-		atomic.StoreInt32(&tc.up, 1)
-		time.Sleep(tc.healthCheckDuration)
-	}
+	healthCancelFn      context.CancelFunc // cancellation function for client healthcheck
 }
