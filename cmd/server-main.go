@@ -77,10 +77,10 @@ var ServerFlags = []cli.Flag{
 }
 
 var serverCmd = cli.Command{
-	Name:   "server",
+	Name:   "server", // server 模式
 	Usage:  "start object storage server",
-	Flags:  append(ServerFlags, GlobalFlags...),
-	Action: serverMain,
+	Flags:  append(ServerFlags, GlobalFlags...), // 所有可用的命令和配置项
+	Action: serverMain,                          // 初始化的动作, 在 Run 方法中执行 ！！！
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -427,37 +427,47 @@ func initConfigSubsystem(ctx context.Context, newObject ObjectLayer) ([]BucketIn
 
 // serverMain handler called for 'minio server' command.
 func serverMain(ctx *cli.Context) {
+	// 信号量的处理
 	signal.Notify(globalOSSignalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 
 	go handleSignals()
 
+	// 设置分析器的速率，采样速率
 	setDefaultProfilerRates()
 
 	// Initialize globalConsoleSys system
+	// 初始化全局 log，加入 target
 	globalConsoleSys = NewConsoleLogger(GlobalContext)
 	logger.AddTarget(globalConsoleSys)
 
 	// Perform any self-tests
+	// 系统自检
 	bitrotSelfTest()
 	erasureSelfTest()
 	compressSelfTest()
 
 	// Handle all server command args.
+	// 处理命令行参数
 	serverHandleCmdArgs(ctx)
 
 	// Handle all server environment vars.
+	// 处理环境变量
 	serverHandleEnvVars()
 
 	// Set node name, only set for distributed setup.
+	// 设置分布式节点名称
 	globalConsoleSys.SetNodeName(globalLocalNodeName)
 
 	// Initialize all help
+	// 初始化帮助信息
 	initHelp()
 
 	// Initialize all sub-systems
+	// 初始化子系统！！！
 	newAllSubsystems()
 
 	// Is distributed setup, error out if no certificates are found for HTTPS endpoints.
+	// https 的证书检查
 	if globalIsDistErasure {
 		if globalEndpoints.HTTPS() && !globalIsTLS {
 			logger.Fatal(config.ErrNoCertsAndHTTPSEndpoints(nil), "Unable to start the server")
@@ -468,6 +478,7 @@ func serverMain(ctx *cli.Context) {
 	}
 
 	// Check for updates in non-blocking manner.
+	// 检查更新
 	go func() {
 		if !globalCLIContext.Quiet && !globalInplaceUpdateDisabled {
 			// Check for new updates from dl.min.io.
@@ -480,9 +491,11 @@ func serverMain(ctx *cli.Context) {
 	}
 
 	// Set system resources to maximum.
+	// 设置系统最大可用资源
 	setMaxResources()
 
 	// Configure server.
+	// 配置路由信息！！！
 	handler, err := configureServerHandler(globalEndpoints)
 	if err != nil {
 		logger.Fatal(config.ErrUnexpectedError(err), "Unable to configure one of server's RPC services")
@@ -502,6 +515,7 @@ func serverMain(ctx *cli.Context) {
 		addrs = append(addrs, globalMinioAddr)
 	}
 
+	// 设置 http 服务
 	httpServer := xhttp.NewServer(addrs).
 		UseHandler(setCriticalErrorHandler(corsHandler(handler))).
 		UseTLSConfig(newTLSConfig(getCert)).
@@ -515,6 +529,8 @@ func serverMain(ctx *cli.Context) {
 
 	setHTTPServer(httpServer)
 
+	// 如果是纠删码模式验证分布式配置
+	// 其中 server 根据挂载的磁盘数量来决定是单机模式还是纠偏码模式。gateway 根据后面的命令参数来决定是使用什么代理模式进行，目前支持 azure gcs hdfs nas s3。
 	if globalIsDistErasure && globalEndpoints.FirstLocal() {
 		for {
 			// Additionally in distributed setup, validate the setup and configuration.
@@ -531,6 +547,7 @@ func serverMain(ctx *cli.Context) {
 		}
 	}
 
+	// 初始化对象层
 	newObject, err := newObjectLayer(GlobalContext, globalEndpoints)
 	if err != nil {
 		logFatalErrs(err, Endpoint{}, true)
@@ -538,6 +555,7 @@ func serverMain(ctx *cli.Context) {
 	logger.SetDeploymentID(globalDeploymentID)
 
 	// Enable background operations for erasure coding
+	// 如果是纠删码模式初始化 自动 Heal 以及 HealMRF
 	if globalIsErasure {
 		initAutoHeal(GlobalContext, newObject)
 		initHealMRF(GlobalContext, newObject)
@@ -545,6 +563,7 @@ func serverMain(ctx *cli.Context) {
 
 	initBackgroundExpiry(GlobalContext, newObject)
 
+	// 初始化对象服务！！！
 	buckets, err := initServer(GlobalContext, newObject)
 	if err != nil {
 		var cerr config.Err
@@ -568,7 +587,9 @@ func serverMain(ctx *cli.Context) {
 		go initFederatorBackend(buckets, newObject)
 	}
 
+	// 加载子系统！！！
 	// Initialize bucket metadata sub-system.
+	// 存储桶元数据子系统
 	globalBucketMetadataSys.Init(GlobalContext, buckets, newObject)
 
 	// Initialize bucket notification sub-system.
@@ -578,6 +599,8 @@ func serverMain(ctx *cli.Context) {
 	globalSiteReplicationSys.Init(GlobalContext, newObject)
 
 	// Initialize users credentials and policies in background right after config has initialized.
+	// IAM is  Identity and Access Management 身份和访问管理
+	// 权限子系统
 	go globalIAMSys.Init(GlobalContext, newObject, globalEtcdClient, globalNotificationSys, globalRefreshIAMInterval)
 
 	// Initialize transition tier configuration manager
@@ -599,6 +622,7 @@ func serverMain(ctx *cli.Context) {
 	}
 
 	// initialize the new disk cache objects.
+	// 如果启用了缓存则设置缓存层
 	if globalCacheConfig.Enabled {
 		logStartupMessage(color.Yellow("WARNING: Disk caching is deprecated for single/multi drive MinIO setups. Please migrate to using MinIO S3 gateway instead of disk caching"))
 		var cacheAPI CacheObjectLayer
@@ -633,6 +657,7 @@ func serverMain(ctx *cli.Context) {
 		}()
 	}
 
+	// debug 模式
 	if serverDebugLog {
 		logger.Info("== DEBUG Mode enabled ==")
 		logger.Info("Currently set environment settings:")

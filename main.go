@@ -22,13 +22,16 @@ import (
 
 	// MUST be first import.
 	_ "github.com/minio/minio/internal/init"
+	"github.com/minio/minio/internal/logger"
 
 	minio "github.com/minio/minio/cmd"
 
 	// Import gateway
+	// 导入 gateway 模式，里面会自动执行 init 函数，该包位于 @/cmd/gateway
 	_ "github.com/minio/minio/cmd/gateway"
 )
 
 func main() {
+	logger.Info("===main")
 	minio.Main(os.Args)
 }

@@ -231,3 +231,30 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.1.0 // indirect
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
+
+replace (
+	github.com/minio/cli v1.22.0 => ./cli
+// github.com/minio/console v0.13.2
+// github.com/minio/csvparser v1.0.0
+// github.com/minio/highwayhash v1.0.2
+// github.com/minio/kes v0.14.0
+// github.com/minio/madmin-go v1.2.4
+// github.com/minio/minio-go/v7 v7.0.20
+// github.com/minio/parquet-go v1.1.0
+// github.com/minio/pkg v1.1.14
+// github.com/minio/selfupdate v0.4.0
+// github.com/minio/sha256-simd v1.0.0
+// github.com/minio/simdjson-go v0.2.1
+// github.com/minio/sio v0.3.0
+// github.com/minio/zipindex v0.2.1
+
+// 	github.com/minio/argon2 v1.0.0 // indirect
+// github.com/minio/colorjson v1.0.1 // indirect
+// github.com/minio/direct-csi v1.3.5-0.20210601185811-f7776f7961bf // indirect
+// github.com/minio/filepath v1.0.0 // indirect
+// github.com/minio/mc v0.0.0-20211207230606-23a05f5a17f2 // indirect
+// github.com/minio/md5-simd v1.1.2 // indirect
+// github.com/minio/operator v0.0.0-20211011212245-31460bbbc4b7 // indirect
+// github.com/minio/operator/logsearchapi v0.0.0-20211011212245-31460bbbc4b7 // indirect
+
+)

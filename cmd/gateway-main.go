@@ -152,7 +152,9 @@ func ValidateGatewayArguments(serverAddr, endpointAddr string) error {
 }
 
 // StartGateway - handler for 'minio gateway <name>'.
+// 使用 gateway 模式
 func StartGateway(ctx *cli.Context, gw Gateway) {
+	logger.Info("===use gateway")
 	signal.Notify(globalOSSignalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 
 	go handleSignals()

@@ -96,6 +96,7 @@ func newApp(name string) *cli.App {
 	commandsTree := trie.NewTrie()
 
 	// registerCommand registers a cli command.
+	// 注册命令的函数
 	registerCommand := func(command cli.Command) {
 		commands = append(commands, command)
 		commandsTree.Insert(command.Name)
@@ -123,6 +124,7 @@ func newApp(name string) *cli.App {
 	}
 
 	// Register all commands.
+	// 注册命令。分为 server 和 gateway 两种模式
 	registerCommand(serverCmd)
 	registerCommand(gatewayCmd)
 
@@ -132,6 +134,7 @@ func newApp(name string) *cli.App {
 		Usage: "show help",
 	}
 
+	// cli 命令
 	app := cli.NewApp()
 	app.Name = name
 	app.Author = "MinIO, Inc."
@@ -140,6 +143,7 @@ func newApp(name string) *cli.App {
 	app.Description = `Build high performance data infrastructure for machine learning, analytics and application data workloads with MinIO`
 	app.Flags = GlobalFlags
 	app.HideHelpCommand = true // Hide `help, h` command, we already have `minio --help`.
+	// 命令合集
 	app.Commands = commands
 	app.CustomAppHelpTemplate = minioHelpTemplate
 	app.CommandNotFound = func(ctx *cli.Context, command string) {
@@ -165,6 +169,7 @@ func Main(args []string) {
 	appName := filepath.Base(args[0])
 
 	// Run the app - exit on error.
+	// 初始化所有的对象
 	if err := newApp(appName).Run(args); err != nil {
 		os.Exit(1)
 	}
