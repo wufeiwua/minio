@@ -293,6 +293,7 @@ func StartGateway(ctx *cli.Context, gw Gateway) {
 	newObject = NewGatewayLayerWithLocker(newObject)
 
 	// Calls all New() for all sub-systems.
+	// 初始化子系统
 	newAllSubsystems()
 
 	// Once endpoints are finalized, initialize the new object api in safe mode.
@@ -308,6 +309,7 @@ func StartGateway(ctx *cli.Context, gw Gateway) {
 		logger.FatalIf(globalNotificationSys.Init(GlobalContext, buckets, newObject), "Unable to initialize notification system")
 	}
 
+	// 加载IAM子系统
 	go globalIAMSys.Init(GlobalContext, newObject, globalEtcdClient, globalNotificationSys, globalRefreshIAMInterval)
 
 	if globalCacheConfig.Enabled {

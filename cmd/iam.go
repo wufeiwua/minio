@@ -151,6 +151,7 @@ func (sys *IAMSys) doIAMConfigMigration(ctx context.Context) error {
 
 // initStore initializes IAM stores
 func (sys *IAMSys) initStore(objAPI ObjectLayer, etcdClient *etcd.Client) {
+	// 开启LDAP配置
 	if globalLDAPConfig.Enabled {
 		sys.EnableLDAPSys()
 	}
