@@ -249,6 +249,7 @@ func initConsoleServer() (*restapi.Server, error) {
 
 	server := restapi.NewServer(api)
 	// register all APIs
+	// 注册所有的 console 接口
 	server.ConfigureAPI()
 
 	restapi.GlobalRootCAs, restapi.GlobalPublicCerts, restapi.GlobalTLSCertsManager = globalRootCAs, globalPublicCerts, globalTLSCerts

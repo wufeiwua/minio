@@ -644,7 +644,9 @@ func serverMain(ctx *cli.Context) {
 		logStartupMessage(color.RedBold("WARNING: Strict AWS S3 compatible incoming PUT, POST content payload validation is turned off, caution is advised do not use in production"))
 	}
 
+	// 如果开启了浏览器
 	if globalBrowserEnabled {
+		// 实例化 console（内置的一个图形化界面）服务，此服务会进行一个代理，将请求发送到 MinIO Server 服务上，所以浏览器的接口实际请求的是 console 中的接口
 		srv, err := initConsoleServer()
 		if err != nil {
 			logger.FatalIf(err, "Unable to initialize console service")
